@@ -17,80 +17,24 @@ except:
     TELEGRAM_CHAT_ID = "1510241198"
 # ========================================
 
-st.set_page_config(page_title="幣安合約智能戰情室", page_icon="📊", layout="wide")
+st.set_page_config(page_title="幣安戰情室 V27 (Debug)", page_icon="🔧", layout="wide")
 
-# CSS 美化 (專業金融風格 + 寬螢幕優化)
+# CSS 美化
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; }
-    
-    /* 頂部指標字體 */
-    div[data-testid="stMetricValue"] {
-        font-family: 'Roboto Mono', monospace;
-        font-size: 24px;
-    }
-    
-    /* 專業分析面板 (HUD) */
-    .analysis-panel {
-        background-color: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 6px;
-        padding: 20px;
-        margin-bottom: 20px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-    }
-    
-    /* 標題與理由 */
-    .signal-header-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 15px;
-        border-bottom: 1px solid #30363d;
-        padding-bottom: 10px;
-    }
-    
-    .signal-title {
-        font-size: 22px;
-        font-weight: 700;
-        display: flex;
-        align-items: center;
-    }
-    
-    .signal-reason {
-        color: #8b949e;
-        font-size: 15px;
-        font-style: italic;
-    }
-    
-    /* 數據網格 - 寬版 6 欄 */
-    .data-grid-wide {
-        display: grid;
-        grid-template-columns: repeat(6, 1fr);
-        gap: 15px;
-    }
-    
-    /* 響應式：螢幕小縮回 3 欄 */
-    @media (max-width: 1000px) {
-        .data-grid-wide {
-            grid-template-columns: repeat(3, 1fr);
-        }
-    }
-    
-    .data-item {
-        background-color: #0d1117;
-        padding: 12px;
-        border-radius: 4px;
-        text-align: center;
-        border: 1px solid #30363d;
-    }
-    
+    div[data-testid="stMetricValue"] { font-family: 'Roboto Mono', monospace; font-size: 24px; }
+    .analysis-panel { background-color: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3); }
+    .signal-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #30363d; padding-bottom: 10px; }
+    .signal-title { font-size: 22px; font-weight: 700; display: flex; align-items: center; }
+    .signal-reason { color: #8b949e; font-size: 15px; font-style: italic; }
+    .data-grid-wide { display: grid; grid-template-columns: repeat(6, 1fr); gap: 15px; }
+    @media (max-width: 1000px) { .data-grid-wide { grid-template-columns: repeat(3, 1fr); } }
+    .data-item { background-color: #0d1117; padding: 12px; border-radius: 4px; text-align: center; border: 1px solid #30363d; }
     .data-label { font-size: 12px; color: #8b949e; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 1px; }
     .data-value { font-size: 18px; font-weight: bold; font-family: 'Roboto Mono'; color: #e6edf3; }
-    
     .text-green { color: #3fb950 !important; }
     .text-red { color: #f85149 !important; }
-    
     .stDataFrame td { font-family: 'Roboto Mono', monospace; font-size: 13px; }
     section[data-testid="stSidebar"] { background-color: #010409; }
 </style>
@@ -203,23 +147,37 @@ def calculate_signal(row, open_price, last_price, bb_upper, bb_lower, rsi, atr, 
         
     return signal, entry_price, tp_price, sl_price, reason, direction
 
-# --- 數據處理 ---
+# --- 數據處理 (V27 除錯版) ---
 async def get_scan_data(vol_threshold, is_aggressive):
     exchange = ccxt_async.binanceusdm()
     data_store = []
     try:
+        # 測試連線
         await exchange.load_markets()
         tickers = await exchange.fetch_tickers()
+        
+        # 抓取 USDT 對
         usdt_pairs = [k for k, v in tickers.items() if '/USDT:USDT' in k]
+        if not usdt_pairs:
+            return "錯誤：找不到 USDT 合約交易對 (可能是 API 連線問題)"
+            
         sorted_pairs = sorted(usdt_pairs, key=lambda x: tickers[x]['quoteVolume'], reverse=True)[:SCAN_LIMIT]
         
         tasks = []
         for symbol in sorted_pairs:
             tasks.append(process_symbol(exchange, symbol, tickers[symbol], vol_threshold, is_aggressive))
+        
         results = await asyncio.gather(*tasks)
         data_store = [r for r in results if r is not None]
-    except: pass
-    finally: await exchange.close()
+        
+        if not data_store:
+            return "警告：有連線但抓不到任何 K 線數據 (可能是 Rate Limit)"
+
+    except Exception as e:
+        # === 關鍵修改：回傳錯誤訊息 ===
+        return f"API 連線錯誤: {str(e)}"
+    finally:
+        await exchange.close()
     
     data_store.sort(key=lambda x: x['quote_vol'], reverse=True)
     return data_store
@@ -328,12 +286,17 @@ async def main_loop():
     while True:
         refresh_count += 1
         data = await get_scan_data(vol_threshold, is_aggressive)
-        current_scan_list = [d['symbol'] for d in data] if data else []
+        current_scan_list = []
         
         with placeholder.container():
-            if not data:
-                st.warning("數據連線中...")
+            # === V27 除錯邏輯 ===
+            if isinstance(data, str) and "錯誤" in data:
+                st.error(f"❌ {data}")
+                st.info("提示: 請檢查 GitHub 的 requirements.txt 是否包含 ccxt, aiohttp")
+            elif not data:
+                st.warning("⚠️ 數據連線中... (若超過 1 分鐘請檢查網路狀態)")
             else:
+                current_scan_list = [d['symbol'] for d in data] if data else []
                 # 1. 頂部重點指標
                 st.subheader("🔥 市場熱度概覽 (Top 5 Volume)")
                 top_5 = data[:5]
@@ -343,10 +306,8 @@ async def main_loop():
                 
                 st.divider()
 
-                # 2. 深度分析區 (垂直佈局：上->中->下)
+                # 2. 深度分析區
                 st.subheader("📊 深度技術分析 (Deep Technical Analysis)")
-                
-                # 第一層：選擇標的
                 try: idx = current_scan_list.index(st.session_state.selected_coin)
                 except: idx = 0
                 sel_coin = st.selectbox("選擇分析標的", current_scan_list, index=idx, key=f"sel_{refresh_count}")
@@ -356,7 +317,6 @@ async def main_loop():
                 if target:
                     detail = await get_coin_detail(target['full_symbol'])
                     
-                    # 第二層：寬版 HUD (修正縮排問題)
                     status_color = "#8b949e"
                     if "空" in target['signal']: status_color = "#f85149"
                     elif "多" in target['signal']: status_color = "#3fb950"
@@ -364,7 +324,6 @@ async def main_loop():
                     
                     def fmt(v): return f"${v:.5f}" if v > 0 else "-"
                     
-                    # === 關鍵修正：HTML 字串完全靠左，沒有縮排 ===
                     html_content = f"""<div class="analysis-panel" style="border-left: 4px solid {status_color};">
 <div class="signal-header-row">
 <div class="signal-title" style="color: {status_color};">{target['signal']}</div>
@@ -380,8 +339,6 @@ async def main_loop():
 </div>
 </div>"""
                     st.markdown(html_content, unsafe_allow_html=True)
-
-                    # 第三層：TradingView 圖表
                     render_tradingview_widget(sel_coin)
                 
                 st.write("")
